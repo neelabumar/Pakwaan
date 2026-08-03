@@ -306,7 +306,19 @@ async function askClaude({ system, prompt, search, onText }) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ system, prompt, search, stream: Boolean(onText) }),
   });
-  if (!res.ok) throw new Error("request failed");
+  if (!res.ok) {
+    /* The reason lives in the body. Without this it is all "request failed". */
+    let detail = "HTTP " + res.status;
+    try {
+      const j = await res.json();
+      detail = j.error || j.message || detail;
+    } catch (_) {
+      try { const txt = await res.text(); if (txt) detail = txt.slice(0, 200); } catch (_) {}
+    }
+    const err = new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    err.status = res.status;
+    throw err;
+  }
 
   if (!onText || !res.body || !res.body.getReader) {
     const data = await res.json();
@@ -339,6 +351,21 @@ async function askClaude({ system, prompt, search, onText }) {
   }
   if (text) onText(text);
   return text;
+}
+
+/* Plain-English next step for whoever deployed this. Not shown to cooks. */
+function hintFor(e) {
+  const m = ((e && e.message) || "").toLowerCase();
+  const st = e && e.status;
+  if (st === 404 && m.includes("<!doctype")) return "The /api/chat function did not deploy. Check the api folder is committed.";
+  if (m.includes("anthropic_api_key")) return "Add ANTHROPIC_API_KEY in Vercel, then redeploy. A new build is required.";
+  if (st === 401 || m.includes("authentication")) return "The key is wrong, revoked, or has a stray space. Paste it again.";
+  if (m.includes("credit") || m.includes("balance") || m.includes("quota")) return "Add credit to the Anthropic account.";
+  if (st === 404 && m.includes("model")) return "The model id is not available to this key.";
+  if (st === 429) return "Rate limited. Wait a minute, or raise MAX_CALLS in api/chat.js.";
+  if (st === 400) return "The request was rejected. The exact reason is in the line above.";
+  if (st >= 500) return "Server error. Open the function logs in Vercel for the stack trace.";
+  return "Open Vercel then Deployments then Logs to see the function error.";
 }
 
 function speak(text, lang) {
@@ -417,12 +444,20 @@ function Spinner({ label }) {
   );
 }
 
-function ErrorBox({ t, onRetry }) {
+function ErrorBox({ t, onRetry, note }) {
   return (
     <div className="rounded-3xl" style={{ background: "#FFEDE8", border: "2px solid #F3B8A8", padding: 22, margin: 16 }}>
       <p style={{ fontWeight: 800, color: C.chili, marginBottom: 6 }}>{t.errTitle}</p>
       <p style={{ color: C.ink, marginBottom: 16 }}>{t.errBody}</p>
       <Btn onClick={onRetry} tone="dark">{t.retry}</Btn>
+      {note && (
+        <div dir="ltr" style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid #F3B8A8" }}>
+          <p style={{ fontFamily: "ui-monospace,Menlo,monospace", fontSize: 13, color: "#8A4B3A", wordBreak: "break-word" }}>
+            {note.message}
+          </p>
+          <p style={{ fontSize: 13, color: C.inkSoft, marginTop: 6 }}>→ {note.hint}</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -442,6 +477,7 @@ export default function App() {
   const [recipes, setRecipes] = useState([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(false);
+  const [errNote, setErrNote] = useState(null);   // what actually went wrong
 
   const [picked, setPicked] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -562,6 +598,7 @@ export default function App() {
       if (clean[0]) setTimeout(() => warm(clean[0]), 250);
     } catch (e) {
       setErr(true);
+      setErrNote({ message: e.message || "unknown error", hint: hintFor(e) });
     } finally {
       setBusy(false);
       if (topRef.current) topRef.current.scrollTop = 0;
@@ -649,7 +686,11 @@ export default function App() {
       const full = await fetchDetail(r);
       if (reqId.current === id) { setDetail(full); setDBusy(false); }
     } catch (e) {
-      if (reqId.current === id) { setDErr(true); setDBusy(false); }
+      if (reqId.current === id) {
+        setDErr(true);
+        setErrNote({ message: e.message || "unknown error", hint: hintFor(e) });
+        setDBusy(false);
+      }
     } finally {
       sinks.current.delete(k);
       if (reqId.current === id) setDLive(false);
@@ -911,7 +952,7 @@ export default function App() {
       </div>
 
       {busy && <Spinner label={t.finding} />}
-      {err && <ErrorBox t={t} onRetry={findDishes} />}
+      {err && <ErrorBox t={t} onRetry={findDishes} note={errNote} />}
       {!busy && !err && recipes.length === 0 && (
         <p style={{ color: C.inkSoft, fontSize: fs(17), fontFamily }}>{t.noResults}</p>
       )}
@@ -1032,7 +1073,7 @@ export default function App() {
         )}
 
         {dBusy && <Spinner label={t.loadingRecipe} />}
-        {dErr && <ErrorBox t={t} onRetry={() => loadDetail(picked)} />}
+        {dErr && <ErrorBox t={t} onRetry={() => loadDetail(picked)} note={errNote} />}
 
         {detail && !dBusy && (
           <>
