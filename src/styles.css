@@ -1,0 +1,41 @@
+/* The app leans on inline styles. These are the only utility classes it uses,
+   written out so the project needs no CSS framework. */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; }
+body { -webkit-text-size-adjust: 100%; }
+button { font: inherit; }
+ul, ol { list-style: none; }
+
+.flex { display: flex; }
+.inline-flex { display: inline-flex; }
+.flex-col { flex-direction: column; }
+.items-center { align-items: center; }
+.items-start { align-items: flex-start; }
+.justify-center { justify-content: center; }
+.justify-between { justify-content: space-between; }
+.rounded-full { border-radius: 9999px; }
+.rounded-3xl { border-radius: 24px; }
+.rounded-2xl { border-radius: 16px; }
+.font-bold { font-weight: 700; }
+.font-semibold { font-weight: 600; }
+.transition { transition: all 0.15s ease; }
+
+@keyframes pkspin { to { transform: rotate(360deg); } }
+@keyframes pkrise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+
+/* Visible focus matters more here than anywhere: she may be tabbing with a
+   keyboard, or squinting at a phone in a bright kitchen. */
+:focus-visible { outline: 3px solid #C1341A; outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+
+/* A printed recipe goes on the counter, so drop anything she cannot tap on paper. */
+@media print {
+  button { display: none !important; }
+  header { display: none !important; }
+  body { background: #fff !important; }
+  ol, ul, li { page-break-inside: avoid; }
+}
