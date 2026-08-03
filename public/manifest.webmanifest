@@ -1,0 +1,13 @@
+{
+  "name": "Pakwan",
+  "short_name": "Pakwan",
+  "description": "Recipes from what is already in your kitchen.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FFF7EC",
+  "theme_color": "#F2830B",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
