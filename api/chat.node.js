@@ -1,14 +1,12 @@
-/* The only piece that touches your API key. The browser never sees it.
-   Runs on Vercel's edge runtime, which streams the reply straight through. */
-
-export const config = { runtime: "edge" };
+/* Fallback proxy, Node runtime instead of edge.
+   Use this only if the site loads but /api/chat 404s on its own:
+     1. delete api/chat.js
+     2. rename this file to api/chat.js
+   Same behaviour, same streaming, no `config` export for Vercel to honour. */
 
 const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 2000;
 
-/* Per-instance memory, so this is a speed bump rather than a lock. It stops
-   a stuck loop or a curious visitor from running up a bill. For a real limit
-   across instances, swap in Upstash Redis or Vercel KV. */
 /* A name mismatch should not look like a broken app. Accept the obvious
    variants, trim stray whitespace from pasting, and report which one was
    found so the health check can say so out loud. */
@@ -36,52 +34,44 @@ function overLimit(ip) {
   return rec.n > MAX_CALLS;
 }
 
-export default async function handler(req) {
-  /* Open /api/chat in a browser to see whether the function deployed and
-     whether it can see the key. Reveals nothing secret. */
+export default async function handler(req, res) {
   if (req.method === "GET") {
     const found = readKey();
-    return new Response(JSON.stringify({
+    res.status(200).json({
       ok: true,
       function: "deployed",
-      runtime: "edge",
+      runtime: "node",
       hasKey: Boolean(found),
       keyName: found ? found.name : null,
       keyLooksValid: found ? found.value.startsWith("sk-ant-") : false,
       keyLength: found ? found.value.length : 0,
       lookedFor: KEY_NAMES,
       model: MODEL,
-    }, null, 2), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    return;
   }
-  if (req.method !== "POST") {
-    return new Response("Method not allowed", { status: 405 });
-  }
+  if (req.method !== "POST") { res.status(405).end("Method not allowed"); return; }
+
   const key = readKey();
   if (!key) {
-    return new Response(JSON.stringify({
+    res.status(500).json({
       error: "No API key found. Name the variable ANTHROPIC_API_KEY in Vercel, then redeploy.",
-    }), {
-      status: 500, headers: { "content-type": "application/json" },
     });
+    return;
   }
 
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "anon";
-  if (overLimit(ip)) {
-    return new Response(JSON.stringify({ error: "Too many requests, wait a minute" }), {
-      status: 429, headers: { "content-type": "application/json" },
-    });
-  }
+  const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || "anon";
+  if (overLimit(ip)) { res.status(429).json({ error: "Too many requests, wait a minute" }); return; }
 
-  let input;
-  try { input = await req.json(); } catch { return new Response("Bad request", { status: 400 }); }
-
+  /* Vercel parses JSON bodies for Node functions, but not always. */
+  let input = req.body;
+  if (typeof input === "string") { try { input = JSON.parse(input); } catch { input = null; } }
   const { system, prompt, search, stream } = input || {};
   if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 4000) {
-    return new Response("Bad request", { status: 400 });
+    res.status(400).end("Bad request");
+    return;
   }
 
-  /* The client asks for a recipe; it does not get to pick the model, the
-     token budget, or the tools. That stays here. */
   const body = {
     model: MODEL,
     max_tokens: MAX_TOKENS,
@@ -101,8 +91,6 @@ export default async function handler(req) {
     body: JSON.stringify(body),
   });
 
-  /* An upstream failure is not a stream. Read it, log it, and hand back
-     something the browser can actually display. */
   if (!upstream.ok) {
     const raw = await upstream.text();
     let message = raw.slice(0, 400);
@@ -111,17 +99,18 @@ export default async function handler(req) {
       message = (j.error && (j.error.message || j.error.type)) || message;
     } catch (_) {}
     console.error("Anthropic error", upstream.status, message);
-    return new Response(JSON.stringify({ error: message, status: upstream.status }), {
-      status: upstream.status,
-      headers: { "content-type": "application/json", "cache-control": "no-store" },
-    });
+    res.status(upstream.status).json({ error: message, status: upstream.status });
+    return;
   }
 
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers: {
-      "content-type": upstream.headers.get("content-type") || "application/json",
-      "cache-control": "no-store",
-    },
-  });
+  res.setHeader("content-type", upstream.headers.get("content-type") || "application/json");
+  res.setHeader("cache-control", "no-store");
+
+  const reader = upstream.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    res.write(Buffer.from(value));
+  }
+  res.end();
 }
